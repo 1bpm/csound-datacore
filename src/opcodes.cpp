@@ -161,8 +161,8 @@ private:
         }
     complete:
         if (lbuffer != NULL) {
-            csound->free(lbuffer); // causes segfault, WHY???????????
-            lbuffer = NULL;
+            //csound->free(lbuffer); // causes segfault, WHY???????????
+            //lbuffer = NULL;
         }
         pmparser_free(csound, maps);
     }
@@ -187,7 +187,9 @@ public:
     }
     
     ~MemParser() {
-        close(fd_mem);
+        if (fd_mem) {
+            close(fd_mem);
+        }
         if (buffer != NULL) {
             csound->free(buffer);
         }
@@ -224,7 +226,6 @@ public:
         iterate_memory_step(
             [&](long index, MYFLT val) { 
                 if (index < offset_position) return true;
-                //std::cout << index << "-" << offset_position << "\n";
                 buffer[buffer_write_position] = val;
                 if (buffer_write_position < buffer_size) {
                     buffer_write_position ++;
