@@ -18,7 +18,7 @@ FLrun
 
 instr 1
     idata[] memps
-    ipid = idata[int(random(0, lenarray(idata)-1))]
+    ipid = 5945
     Sname = sprintf("%s (%d)", mempsname(ipid), ipid)
     FLsetText Sname, gilabel
     a1 memson ipid, gkx, gky, 44100, 1

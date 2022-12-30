@@ -1,7 +1,7 @@
-# csound-memread : Memory audification/sonification for Csound on Linux
+# csound-datacore : Data audification/sonification for Csound on Linux
 
 ## Overview
-csound-memread provides a way to read data associated with a process ID as audio.
+csound-datacore provides a way to read data associated with a process ID as audio.
 Only Linux is supported or an OS that supports userspace reading of /proc/.../mem
 
 ## Requirements

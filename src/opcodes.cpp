@@ -1,4 +1,9 @@
+#ifdef USE_PROCMAPS
 #include "pmparser.h"
+#include <sys/mman.h>
+#define PROC_DIR "/proc/"
+#endif
+
 #include "maketable.hpp"
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,7 +15,6 @@
 #include <plugin.h>
 #include <functional>
 #include <vector>
-#include <sys/mman.h>
 
 #ifdef USE_X11
 #include <X11/Xlib.h>
@@ -22,9 +26,11 @@
 #include <sys/stat.h>
 #include <dirent.h>
 
-#define PROC_DIR "/proc/"
 
 
+
+
+#ifdef USE_PROCMAPS
 
 struct mempsname : csnd::Plugin<1, 1> {
     static constexpr char const *otypes = "S";
@@ -32,13 +38,17 @@ struct mempsname : csnd::Plugin<1, 1> {
     int init() {
         int pid = inargs[0];
         char* path = (char*) csound->malloc(sizeof(char) * PATH_MAX);
-        sprintf(path, "%s%d/comm", PROC_DIR, pid);
+        sprintf(path, "%s%d/cmdline", PROC_DIR, pid);
         
         FILE* f = fopen(path, "r");
         char* buffer = (char*) csound->malloc(sizeof(char) * 1024);
         size_t size = fread(buffer, sizeof(char), 1024, f);
+        if (size > 0) {
+            if ('\n' == buffer[size - 1]) {
+                buffer[size - 1] = '\0';
+            }
+        }
 
-        
         fclose(f);
         STRINGDAT &opath = outargs.str_data(0);
         opath.size = strlen(buffer); 
@@ -94,7 +104,7 @@ struct memps : csnd::Plugin<1, 0> {
                     struct stat fileInfo;
                     strcpy(path, PROC_DIR);
                     strcat(path, de->d_name);
-                    if (stat(path, &fileInfo) == 0) {
+                    if (stat(strcat(path, "/maps"), &fileInfo) == 0) {
                         if (fileInfo.st_uid == thisUser) {
                             (*processnum)++;
                             *processes = (int)atoi(de->d_name);
@@ -111,64 +121,6 @@ struct memps : csnd::Plugin<1, 0> {
 };
 
 
-#ifdef USE_X11
-struct winson : csnd::Plugin<1, 1> {
-    static constexpr char const *otypes = "a";
-    static constexpr char const *itypes = "i";
-    Display* display;
-    Window root;
-    int width;
-    int height;
-    MYFLT* buffer;
-    int buffer_size;
-    int buffer_read_position;
-    int buffer_write_position;
-    
-    int init() {
-        display = XOpenDisplay(NULL);
-        //root = DefaultRootWindow(display);
-        root = 0x2200004;
-        XWindowAttributes gwa;
-        XGetWindowAttributes(display, root, &gwa);
-        
-        width = gwa.width;
-        height = gwa.height;
-        buffer_size = width * height;
-        buffer = (MYFLT*) csound->malloc(sizeof(MYFLT) * buffer_size);
-        buffer_read_position = 0;
-        buffer_write_position = 0;
-        refill_buffer();
-        return OK;
-    }
-    
-    int refill_buffer() {
-        buffer_write_position = 0;
-        XImage* image = XGetImage(display, root, 0, 0, width, height, AllPlanes, ZPixmap);
-        for (int x = 0; x < width; x++) {
-            for (int y=0; y < height; y++) {
-                buffer[buffer_write_position] = ((MYFLT) XGetPixel(image,x,y)) / 16777215;
-                buffer_write_position++;
-            }
-        }
-        return OK;
-    }
-    
-    int aperf() {
-        for (int i = 0; i < nsmps; i++) {
-            outargs(0)[i] = buffer[buffer_read_position];
-            if (LIKELY(buffer_read_position + 1 < buffer_size)) {
-                buffer_read_position++;
-            } else {
-                refill_buffer();
-                buffer_read_position = 0;
-            }
-        }
-            
-        return OK;    
-        
-    }
-};
-#endif
 
 
 
@@ -370,18 +322,265 @@ struct memson : csnd::Plugin<1, 5> {
         
     }
     
-    
 };
+
+#endif
+// end with procmaps
+
+
+// ifn rawreadtable Sfile, ichannels, istart, iskip
+struct rawreadtable : csnd::Plugin<1, 4> {
+    static constexpr char const *otypes = "i";
+    static constexpr char const *itypes = "Sjjj";
+    
+    int init() {
+        FILE* infile;
+        STRINGDAT &path = inargs.str_data(0);
+        FUNC *table;
+        int channels = (inargs[1] == 2) ? 2 : 1;            
+        int start = (inargs[2] < 0) ? 0 : (int) inargs[2];
+        int skip = (inargs[3] < 1) ? 1 : (int) inargs[3];
+        
+        int buffsize = 16384;
+        
+        char* buffer = (char*) csound->malloc(sizeof(char) * buffsize);
+        size_t buffused;
+        int readpos = 0;
+        long int writepos = 0;
+        
+        infile = fopen(path.data, "rb");
+        fseek(infile, 0L, SEEK_END);
+        int length = ftell(infile) / skip;
+        fseek(infile, start, SEEK_SET);
+        
+        if ((maketable(csound, (int)length, &table, channels)) != OK) {
+            return csound->init_error("Cannot create ftable");
+        
+        }
+        buffused = fread(buffer, sizeof(char), buffsize, infile);
+        
+        while (buffused != 0) {
+            while (readpos < buffused) {
+                table->ftable[writepos] = ((MYFLT) buffer[readpos] / CHAR_MAX);
+                writepos ++;
+                readpos += skip;
+            }
+            readpos = 0;
+            buffused = fread(buffer, sizeof(char), buffsize, infile);
+
+        }
+        csound->free(buffer);
+        outargs[0] = table->fno;
+        return OK;
+    }
+};
+
+// aout rawread Sfile, [iloop = 0]
+struct rawread : csnd::Plugin<1, 2> {
+    static constexpr char const *otypes = "a";
+    static constexpr char const *itypes = "So";
+    
+    FILE* infile;
+    char* buffer;
+    int buffsize;
+    size_t buffused;
+    int readpos;
+    bool doloop;
+    bool dooutput;
+    
+    int init() {
+        buffsize = 16384;
+        readpos = 0;
+        doloop = (inargs[1] >= 1) ? true : false;
+        buffer = (char*) csound->malloc(sizeof(char) * buffsize);
+        STRINGDAT &path = inargs.str_data(0);
+        infile = fopen(path.data, "rb");
+        if (infile == NULL) {
+            return csound->init_error("Cannot open file");
+        }
+        dooutput = true;
+        fillbuffer();
+        csound->plugin_deinit(this);
+        return OK;
+    }
+    
+    int deinit() {
+        if (infile != NULL) {
+            fclose(infile);
+        }
+        return OK;
+    }
+    
+    void fillbuffer() {
+        buffused = fread(buffer, sizeof(char), buffsize, infile);
+    }
+    
+    int aperf() {
+        if (!dooutput) {
+            return OK;
+        }
+        for (int i = 0; i < nsmps; i++) {
+            outargs(0)[i] = ((MYFLT) buffer[readpos] / CHAR_MAX);
+            if (readpos + 1 < buffused) {
+                readpos ++;
+            } else {
+                readpos = 0;
+                fillbuffer();
+                if (buffused == 0) {
+                    if (doloop) {
+                        fseek(infile, 0, SEEK_SET);
+                        fillbuffer();
+                    } else {
+                        dooutput = false;
+                    }
+                }
+            }
+        }
+        return OK;
+    }
+};
+
+// aL, aR rawread Sfile, [iloop = 0]
+struct rawreadstereo : csnd::Plugin<2, 2> {
+    static constexpr char const *otypes = "aa";
+    static constexpr char const *itypes = "So";
+    
+    FILE* infile;
+    char* buffer;
+    int buffsize;
+    size_t buffused;
+    int readpos;
+    bool doloop;
+    bool dooutput;
+    
+    int init() {
+        buffsize = 16384;
+        readpos = 0;
+        doloop = (inargs[1] >= 1) ? true : false;
+        buffer = (char*) csound->malloc(sizeof(char) * buffsize);
+        STRINGDAT &path = inargs.str_data(0);
+        infile = fopen(path.data, "rb");
+        if (infile == NULL) {
+            return csound->init_error("Cannot open file");
+        }
+        dooutput = true;
+        fillbuffer();
+        csound->plugin_deinit(this);
+        return OK;
+    }
+    
+    int deinit() {
+        if (infile != NULL) {
+            fclose(infile);
+        }
+        return OK;
+    }
+    
+    void fillbuffer() {
+        buffused = fread(buffer, sizeof(char), buffsize, infile);
+    }
+    
+    int aperf() {
+        if (!dooutput) {
+            return OK;
+        }
+        for (int i = 0; i < nsmps; i++) {
+            outargs(0)[i] = ((MYFLT) buffer[readpos] / CHAR_MAX); // - 0.5 ;
+            outargs(1)[i] = ((MYFLT) buffer[readpos+1] / CHAR_MAX);
+            if (readpos + 2 < buffused) {
+                readpos = readpos + 2;
+            } else {
+                readpos = 0;
+                fillbuffer();
+                if (buffused == 0) {
+                    if (doloop) {
+                        fseek(infile, 0, SEEK_SET);
+                        fillbuffer();
+                    } else {
+                        dooutput = false;
+                    }
+                }
+            }
+        }
+        return OK;
+    }
+};
+
+
+
+#ifdef USE_X11
+struct winson : csnd::Plugin<1, 1> {
+    static constexpr char const *otypes = "a";
+    static constexpr char const *itypes = "i";
+    Display* display;
+    Window root;
+    int width;
+    int height;
+    MYFLT* buffer;
+    int buffer_size;
+    int buffer_read_position;
+    int buffer_write_position;
+    
+    int init() {
+        display = XOpenDisplay(NULL);
+        //root = DefaultRootWindow(display);
+        root = 0x2200004;
+        XWindowAttributes gwa;
+        XGetWindowAttributes(display, root, &gwa);
+        
+        width = gwa.width;
+        height = gwa.height;
+        buffer_size = width * height;
+        buffer = (MYFLT*) csound->malloc(sizeof(MYFLT) * buffer_size);
+        buffer_read_position = 0;
+        buffer_write_position = 0;
+        refill_buffer();
+        return OK;
+    }
+    
+    int refill_buffer() {
+        buffer_write_position = 0;
+        XImage* image = XGetImage(display, root, 0, 0, width, height, AllPlanes, ZPixmap);
+        for (int x = 0; x < width; x++) {
+            for (int y=0; y < height; y++) {
+                buffer[buffer_write_position] = ((MYFLT) XGetPixel(image,x,y)) / 16777215;
+                buffer_write_position++;
+            }
+        }
+        return OK;
+    }
+    
+    int aperf() {
+        for (int i = 0; i < nsmps; i++) {
+            outargs(0)[i] = buffer[buffer_read_position];
+            if (LIKELY(buffer_read_position + 1 < buffer_size)) {
+                buffer_read_position++;
+            } else {
+                refill_buffer();
+                buffer_read_position = 0;
+            }
+        }
+            
+        return OK;    
+        
+    }
+};
+#endif
 
 
 #include <modload.h>
 
 void csnd::on_load(csnd::Csound *csound) {
+    csnd::plugin<rawread>(csound, "rawread", csnd::thread::ia);
+    csnd::plugin<rawreadstereo>(csound, "rawread.s", csnd::thread::ia);
+    csnd::plugin<rawreadtable>(csound, "rawreadtable", csnd::thread::i);
+    
+#ifdef USE_PROCMAPS
     csnd::plugin<memson>(csound, "memson", csnd::thread::ia);
     csnd::plugin<memps>(csound, "memps", csnd::thread::i);
     csnd::plugin<mempsname>(csound, "mempsname", csnd::thread::i);
     csnd::plugin<mem2tab>(csound, "mem2tab", csnd::thread::i);
-    
+#endif
 
 #ifdef USE_X11
 	csnd::plugin<winson>(csound, "winson", csnd::thread::ia);

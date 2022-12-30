@@ -20,6 +20,7 @@ instr 1
     idata[] memps
     ipid = idata[int(random(0, lenarray(idata)-1))]
     Sname = sprintf("%s (%d)", mempsname(ipid), ipid)
+prints Sname
     FLsetText Sname, gilabel
 	ifn mem2tab ipid, 1
 	aindex lphasor 1
