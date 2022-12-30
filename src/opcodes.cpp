@@ -254,6 +254,19 @@ public:
 };
 
 
+struct mempssize : csnd::Plugin<1, 2> {
+    static constexpr char const *otypes = "i";
+    static constexpr char const *itypes = "io";
+
+    int init() {
+        MemParser* mp = new MemParser(csound, (int)inargs[0], (inargs[1] > 0));
+
+        long length = mp->get_size();
+        outargs[0] = FL(length);
+        return OK;
+    }
+};
+
 // ifn mem2tab ipid, iskipzero=0
 struct mem2tab : csnd::Plugin<1, 2> {
     static constexpr char const *otypes = "i";
@@ -579,6 +592,7 @@ void csnd::on_load(csnd::Csound *csound) {
 #ifdef USE_PROCMAPS
     csnd::plugin<memson>(csound, "memson", csnd::thread::ia);
     csnd::plugin<memps>(csound, "memps", csnd::thread::i);
+    csnd::plugin<mempssize>(csound, "mempssize", csnd::thread::i);
     csnd::plugin<mempsname>(csound, "mempsname", csnd::thread::i);
     csnd::plugin<mem2tab>(csound, "mem2tab", csnd::thread::i);
 #endif
